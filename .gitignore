@@ -1,0 +1,28 @@
+node_modules/
+**/dist/
+**/coverage/
+**/.next/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+*.tgz
+*.tgz.bak
+*.tsbuildinfo
+
+# Tooling cache
+.turbo/
+.pnpm-store/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*

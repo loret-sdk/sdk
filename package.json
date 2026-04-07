@@ -1,0 +1,41 @@
+{
+  "name": "loret",
+  "description": "Loret monorepo",
+  "license": "MIT",
+  "private": true,
+  "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10.12.4"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "lint:fix": "pnpm -r lint:fix",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm -r test:watch",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "quality": "pnpm build && pnpm typecheck && pnpm lint && pnpm test",
+    "simulate": "tsx packages/sdk/scripts/simulate.ts",
+    "validate:sdk": "pnpm --filter @loret/sdk validate",
+    "clean": "find . \\( -name dist -o -name coverage \\) -type d -prune -exec rm -rf '{}' +"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.57.0",
+    "@typescript-eslint/parser": "^8.57.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-prettier": "^5.5.5",
+    "eslint-plugin-promise": "^7.2.1",
+    "eslint-plugin-sonarjs": "^4.0.2",
+    "eslint-plugin-unused-imports": "^4.4.1",
+    "prettier": "^3.8.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.57.0"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "@loret/sdk",
+  "description": "AI runtime guardrail SDK — enforce cost, safety, and loop controls on every LLM call",
+  "license": "MIT",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loret-sdk/sdk.git"
+  },
+  "homepage": "https://github.com/loret-sdk/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/loret-sdk/sdk/issues"
+  },
+  "keywords": [
+    "llm",
+    "ai",
+    "sdk",
+    "guardrails",
+    "openai",
+    "anthropic",
+    "agent",
+    "runtime",
+    "loop-detection"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./providers/openai": {
+      "import": "./dist/providers/openai.js",
+      "types": "./dist/providers/openai.d.ts"
+    },
+    "./providers/anthropic": {
+      "import": "./dist/providers/anthropic.js",
+      "types": "./dist/providers/anthropic.d.ts"
+    },
+    "./testing": {
+      "import": "./dist/testing.js",
+      "types": "./dist/testing.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "eslint src scripts --ext .ts",
+    "lint:fix": "eslint src scripts --ext .ts --fix",
+    "test": "node --import tsx/esm --test src/__tests__/sdk.test.ts",
+    "test:watch": "node --import tsx/esm --test --watch src/__tests__/sdk.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.contracts.json",
+    "validate": "tsx scripts/validate.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "openai": "^6.29.0"
+  },
+  "devDependencies": {
+    "@loret/shared": "workspace:*",
+    "@types/node": "^22.13.10"
+  }
+}
