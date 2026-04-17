@@ -1,8 +1,8 @@
 # Loret
 
-**Control cost, reliability, and safety of every LLM call — before it leaves your system.**
+**Runtime policy layer for LLM applications — enforce cost, privacy, and runtime guardrails on every model call.**
 
-Loret is a lightweight runtime layer between your application and model providers. It enforces guardrails, prevents agent loops, routes failures, and emits telemetry — all in-process, with no proxy.
+Loret is an in-process policy layer that evaluates every model call before provider dispatch. It enforces budgets, prevents agent loops, controls PII, routes failures, and emits telemetry — with no proxy or external service.
 
 ---
 
@@ -16,7 +16,7 @@ Calling an LLM is easy. Operating it in production is not.
 - Sensitive data leaks into prompts
 - Failures are hard to observe
 
-Loret adds a single control layer that makes LLM execution **predictable, safe, and observable**.
+Without a control layer, cost limits only exist on paper. Loret makes every `run()` call pass through policy enforcement before a single token is spent.
 
 ---
 
@@ -28,10 +28,9 @@ App → Loret → Guardrails → Routing → Provider
 
 Every request is:
 
-- Checked against budget and safety rules
-- Evaluated for agent loop patterns
-- Processed through guardrails (cost, PII, trace limits)
-- Routed with retry and fallback
+- Evaluated against budget, privacy, and runtime rules
+- Checked for loop patterns from prior tool activity
+- Routed with retry and fallback across configured providers
 - Observed via async telemetry
 
 All in-process. No proxy. No added network hop.
@@ -58,28 +57,14 @@ Same tool + different inputs + repeated empty/error results
 - Suspicion decays when progress resumes
 - No embeddings, no LLM calls, no semantic guesswork
 
-> Deterministic. Fast. Zero false positives.
-
-### Example
-
-An agent retries the same search tool repeatedly:
-
-```
-Turn 1 → search("policy 2024")        → empty
-Turn 2 → search("policy update 2024") → empty
-Turn 3 → search("latest policy 2024") → empty
-```
-
-Without Loret → continues looping, burning tokens
-
-With Loret → **blocked at turn 3** with a structured error
+> Deterministic. Fast. Explicit blocking criteria.
 
 ---
 
 ## Quick Start
 
 ```bash
-pnpm add @loret/sdk
+npm install @loret/sdk
 ```
 
 ```ts
@@ -89,19 +74,20 @@ import { OpenAIAdapter } from "@loret/sdk/providers/openai";
 const client = new Loret({
   projectId: "my-project",
   adapters: [new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY! })],
-  providers: [
-    { provider: "openai", model: "gpt-4o-mini", priority: 1 },
-  ],
+  providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1 }],
+  budgetLimits: [{ scope: "per_call", maxCostUsd: 0.05 }],
 });
 
 const result = await client.run({
-  messages: [{ role: "user", content: "Explain distributed systems simply." }],
+  messages: [{ role: "user", content: "Hello" }],
+  maxTokens: 256,
 });
 
 console.log(result.content);
-
-await client.shutdown(); // flush telemetry before exit
+await client.shutdown();
 ```
+
+See the full [SDK README](packages/sdk/README.md) for configuration, deployment guarantees, and API reference.
 
 ---
 
@@ -109,7 +95,7 @@ await client.shutdown(); // flush telemetry before exit
 
 - Enforce cost budgets before execution
 - Detect and stop agent loops deterministically
-- Apply runtime guardrails (cost, duration, retries)
+- Apply runtime guardrails (cost, duration, call count)
 - Detect and control PII in prompts
 - Retry and fallback across providers
 - Emit structured telemetry without blocking
@@ -118,15 +104,18 @@ await client.shutdown(); // flush telemetry before exit
 
 ## Key Concepts
 
-**Adapters** wrap a provider's API (`OpenAIAdapter`, `AnthropicAdapter`). You register one adapter per provider.
+**Adapters** connect Loret to a provider's API (`OpenAIAdapter`, `AnthropicAdapter`). You register one adapter per provider.
 
 **Providers** define which models to use and in what order. Loret routes and falls back automatically.
 
 ```ts
-adapters: [new OpenAIAdapter({ apiKey: "..." })],
+adapters: [
+  new OpenAIAdapter({ apiKey: "..." }),
+  new AnthropicAdapter({ apiKey: "..." }),
+],
 providers: [
-  { provider: "openai", model: "gpt-4o-mini",   priority: 1 },
-  { provider: "openai", model: "gpt-3.5-turbo", priority: 2 },
+  { provider: "openai",    model: "gpt-4o-mini",   priority: 1 },
+  { provider: "anthropic", model: "claude-haiku",   priority: 2 },
 ],
 ```
 
@@ -151,8 +140,10 @@ These tradeoffs keep the runtime fast, predictable, and reliable.
 
 ---
 
-## Philosophy
+## Documentation
 
-Model calls should be easy to make — and hard to misuse.
+See the full [SDK README](packages/sdk/README.md) for configuration, deployment guarantees, and API reference.
 
-Loret makes LLM execution explicit, controlled, and observable.
+## License
+
+MIT
