@@ -61,10 +61,10 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "openai": "^6.29.0"
+    "openai": "^6.34.0"
   },
   "devDependencies": {
     "@loret/shared": "workspace:*",
-    "@types/node": "^22.13.10"
+    "@types/node": "^22.19.17"
   }
 }
