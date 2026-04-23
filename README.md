@@ -73,8 +73,9 @@ import { OpenAIAdapter } from "@loret/sdk/providers/openai";
 
 const client = new Loret({
   projectId: "my-project",
-  adapters: [new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY! })],
+  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
   providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1 }],
+  mode: "enforce",
   budgetLimits: [{ scope: "per_call", maxCostUsd: 0.05 }],
 });
 
@@ -110,8 +111,8 @@ See the full [SDK README](packages/sdk/README.md) for configuration, deployment 
 
 ```ts
 adapters: [
-  new OpenAIAdapter({ apiKey: "..." }),
-  new AnthropicAdapter({ apiKey: "..." }),
+  new OpenAIAdapter("..."),
+  new AnthropicAdapter("..."),
 ],
 providers: [
   { provider: "openai",    model: "gpt-4o-mini",   priority: 1 },

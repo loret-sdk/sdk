@@ -7,7 +7,7 @@
 
 export { Loret } from "./client";
 
-export type { LoretOptions, RunOptions, RunResult } from "./types";
+export type { LoretOptions, RunOptions, RunResult, LoopRecovery } from "./types";
 
 export type { ProviderAdapter } from "./providers/adapter";
 export { ProviderError } from "./providers/adapter";

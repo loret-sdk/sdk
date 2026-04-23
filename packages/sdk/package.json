@@ -2,7 +2,7 @@
   "name": "@loret/sdk",
   "description": "Runtime policy layer for LLM applications — enforce cost, privacy, and runtime guardrails on every model call",
   "license": "MIT",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,7 +28,20 @@
     "anthropic",
     "agent",
     "runtime",
-    "loop-detection"
+    "loop-detection",
+    "cost-control",
+    "budget",
+    "pii",
+    "privacy",
+    "fallback",
+    "retry",
+    "gpt",
+    "claude",
+    "langchain",
+    "ai-agent",
+    "token-limit",
+    "rate-limit",
+    "middleware"
   ],
   "exports": {
     ".": {

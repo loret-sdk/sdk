@@ -23,11 +23,13 @@ import {
 } from "./errors";
 import { newTraceGuardState, validateTraceGuards } from "./guardrails/trace-guard";
 import { checkPrivacy } from "./interceptor/pii";
-import type { LoretOptions, RunOptions, RunResult } from "./types";
+import type { LoretOptions, RunOptions, RunResult, LoopRecovery } from "./types";
 import type { InternalWiring } from "./internal/wiring";
 
 const DEFAULT_CONTROL_PLANE_URL = "https://api.loret.dev";
 const DEFAULT_POLICY_TTL_MS = 30_000;
+
+let _welcomeShown = false;
 
 // Nominal fallback rates — per 1,000 tokens.
 // Used only when no active ProviderTarget in the current policy has pricing configured.
@@ -117,6 +119,13 @@ export class Loret {
     // Guard on !wiring so this does not fire in test clients.
     if (!wiring) warnIfWindowBudgets(bootstrapSnapshot.budgetLimits);
     if (!wiring) warnIfMonitorModeWithGuards(bootstrapSnapshot);
+
+    if (!wiring && !_welcomeShown) {
+      _welcomeShown = true;
+      console.log(
+        "[Loret] Thanks for using Loret! Feedback & issues → https://github.com/loret-sdk/sdk/issues",
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -179,13 +188,19 @@ export class Loret {
     const estimate = buildCostEstimate(options.messages, options.maxTokens, policy.providerTargets);
     this._usingFallbackPricing = estimate.usingFallbackPricing;
     if (estimate.usingFallbackPricing && !this._fallbackPricingWarned && !this._isTestClient) {
-      this._fallbackPricingWarned = true;
-      console.warn(
-        "[Loret] Cost estimation is using nominal fallback pricing ($0.005/1k input, $0.015/1k output). " +
-          "No active provider target has inputUsdPer1kTokens or outputUsdPer1kTokens configured. " +
-          "Budget and cost guard limits may be inaccurate. " +
-          "Set inputUsdPer1kTokens and outputUsdPer1kTokens on your provider targets.",
-      );
+      const hasCostGuards =
+        policy.budgetLimits.some((b) => b.maxCostUsd != null) ||
+        policy.traceGuards?.maxCostPerTraceUsd != null ||
+        policy.workflowGuards?.maxCostPerWorkflowUsd != null;
+      if (hasCostGuards) {
+        this._fallbackPricingWarned = true;
+        console.warn(
+          "[Loret] Cost estimation is using nominal fallback pricing ($0.005/1k input, $0.015/1k output). " +
+            "No active provider target has inputUsdPer1kTokens or outputUsdPer1kTokens configured. " +
+            "Budget and cost guard limits may be inaccurate. " +
+            "Set inputUsdPer1kTokens and outputUsdPer1kTokens on your provider targets.",
+        );
+      }
     }
     const budgetAllowed = this.enforceBudget(requestId, traceId, startedAt, policy, estimate, options.metadata);
 
@@ -248,14 +263,20 @@ export class Loret {
         );
         if (policy.mode === "enforce") {
           if (budgetAllowed) this.budgetManager.rollbackReservation(estimate);
-          this.flusher.emit(
-            event(requestId, traceId, policy.projectId, "request_failed", {
-              errorCode: "LOOP_GUARD_EXCEEDED",
-              latencyMs: Date.now() - startedAt,
-              metadata: options.metadata,
-            }),
-          );
-          throw new LoopGuardExceededError(loopResult.reason, loopResult.consecutiveClassA, loopResult.suspicion);
+          const recovery = buildLoopRecovery(options.loopSignal, loopResult.consecutiveClassA);
+          return {
+            content: "",
+            provider: "",
+            model: "",
+            usage: { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 },
+            requestId,
+            traceId,
+            usedFallback: false,
+            latencyMs: Date.now() - startedAt,
+            totalAttempts: 0,
+            blocked: true,
+            recovery,
+          };
         }
         // monitor mode: telemetry emitted above, request proceeds
       }
@@ -608,6 +629,19 @@ function assertPositiveInteger(name: string, value: number | undefined): void {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`Loret: ${name} must be a positive integer, got ${value}`);
   }
+}
+
+function buildLoopRecovery(signal: import("./guardrails/loop-guard").LoopSignal, consecutiveCount: number): LoopRecovery {
+  const hasArgs = signal.toolArgs != null && signal.toolArgs.length > 0;
+  let suggestion: LoopRecovery["suggestion"];
+  if (signal.resultStatus === "error") {
+    suggestion = "try_different_tool";
+  } else if (hasArgs) {
+    suggestion = "modify_args";
+  } else {
+    suggestion = "escalate_to_user";
+  }
+  return { staleTool: signal.toolName, staleArgs: signal.toolArgs, consecutiveCount, suggestion };
 }
 
 function event(

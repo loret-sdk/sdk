@@ -20,6 +20,17 @@ export interface RunOptions {
   loopSignal?: LoopSignal;
 }
 
+export interface LoopRecovery {
+  /** The tool that was repeatedly called. */
+  staleTool: string;
+  /** The raw arguments string from the repeated call. */
+  staleArgs: string | undefined;
+  /** How many consecutive identical calls were made. */
+  consecutiveCount: number;
+  /** Actionable suggestion for the agent's next step. */
+  suggestion: "try_different_tool" | "modify_args" | "escalate_to_user";
+}
+
 export interface RunResult {
   content: string;
   provider: string;
@@ -34,6 +45,10 @@ export interface RunResult {
   usedFallback: boolean;
   latencyMs: number;
   totalAttempts: number;
+  /** True when a loop guard blocked this call. When true, `content` is empty and `recovery` is set. */
+  blocked?: boolean;
+  /** Structured recovery context — present only when `blocked` is true. */
+  recovery?: LoopRecovery;
 }
 
 export interface LoretOptions {
