@@ -6,7 +6,7 @@ Without a control layer, agents burn money in loops, retries mask provider failu
 
 ## Stability
 
-`@loret/sdk@1.0.1` is production-ready. Validated against OpenAI (`gpt-4o-mini`, `gpt-4o`) and Anthropic (`claude-haiku-4-5`, `claude-sonnet-4-6`) across 50 probe scenarios and 157 unit tests.
+`@loret/sdk@1.0.2` is production-ready. Validated against OpenAI (`gpt-4o-mini`, `gpt-4o`) and Anthropic (`claude-haiku-4-5`, `claude-sonnet-4-6`) across 50 probe scenarios and 157 unit tests.
 
 ## What Loret is NOT
 
@@ -31,8 +31,9 @@ import { OpenAIAdapter } from "@loret/sdk/providers/openai";
 
 const client = new Loret({
   projectId: "my-project",
-  adapters: [new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY! })],
+  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
   providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1 }],
+  mode: "enforce",
   budgetLimits: [{ scope: "per_call", maxCostUsd: 0.05 }],
 });
 
@@ -47,73 +48,43 @@ await client.shutdown();
 
 ## Agent example
 
-A multi-turn agent loop with fallback routing, workflow cost limits, and loop detection — all enforced. This is where Loret earns its keep: an uncontrolled version of this loop can burn unbounded tokens if the agent gets stuck.
+Copy, paste, run. This simulates an agent stuck in a loop — Loret detects it and returns a structured recovery plan. Costs < $0.01.
 
 ```ts
-import { Loret, LoopGuardExceededError, WorkflowGuardExceededError } from "@loret/sdk";
+import { Loret } from "@loret/sdk";
 import { OpenAIAdapter } from "@loret/sdk/providers/openai";
-import { AnthropicAdapter } from "@loret/sdk/providers/anthropic";
 import type { LoopSignal } from "@loret/sdk";
 
 const client = new Loret({
-  projectId: "research-agent",
-  adapters: [
-    new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY! }),
-    new AnthropicAdapter({ apiKey: process.env.ANTHROPIC_API_KEY! }),
-  ],
-  providers: [
-    { provider: "openai", model: "gpt-4o-mini", priority: 1, inputUsdPer1kTokens: 0.00015, outputUsdPer1kTokens: 0.0006 },
-    { provider: "anthropic", model: "claude-haiku-4-5", priority: 2, inputUsdPer1kTokens: 0.0008, outputUsdPer1kTokens: 0.004 },
-  ],
+  projectId: "demo",
+  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
+  providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1, inputUsdPer1kTokens: 0.00015, outputUsdPer1kTokens: 0.0006 }],
   mode: "enforce",
   workflowGuards: { maxCallsPerWorkflow: 10, maxCostPerWorkflowUsd: 0.50 },
   loopGuards: { classAConsecutive: 3 },
 });
 
-const traceId = "research-workflow-1";
-const messages = [{ role: "user" as const, content: "Find recent solid-state battery papers." }];
-let prevSignal: LoopSignal | undefined;
+const stuckSignal: LoopSignal = {
+  toolName: "search_db", toolArgs: '{"q":"users"}',
+  toolResult: "[]", resultStatus: "empty",
+};
 
-for (let turn = 0; turn < 10; turn++) {
-  try {
-    const result = await client.run({
-      messages,
-      metadata: { traceId },
-      loopSignal: prevSignal,
-    });
-
-    const toolCall = parseToolCall(result.content);
-    if (!toolCall) break;
-
-    const toolResult = await executeTool(toolCall);
-    prevSignal = {
-      toolName: toolCall.name,
-      toolArgs: JSON.stringify(toolCall.args),
-      toolResult: JSON.stringify(toolResult),
-      resultStatus: toolResult.length === 0 ? "empty" : "success",
-    };
-
-    messages.push(
-      { role: "assistant", content: result.content },
-      { role: "user", content: `Tool result: ${JSON.stringify(toolResult)}. Continue.` },
-    );
-  } catch (err) {
-    if (err instanceof LoopGuardExceededError) {
-      console.error(`Loop detected at turn ${turn}:`, err.hint);
-      break;
-    }
-    if (err instanceof WorkflowGuardExceededError) {
-      console.error(`Workflow limit hit:`, err.message);
-      break;
-    }
-    throw err;
+for (let turn = 1; turn <= 6; turn++) {
+  const r = await client.run({
+    messages: [{ role: "user", content: "Find user records." }],
+    maxTokens: 50, metadata: { traceId: "demo-1" }, loopSignal: stuckSignal,
+  });
+  if (r.blocked) {
+    console.log(`Turn ${turn}: BLOCKED — suggestion: ${r.recovery!.suggestion}`);
+    console.log("Recovery context:", JSON.stringify(r.recovery, null, 2));
+    break;
   }
+  console.log(`Turn ${turn}: allowed ($${r.usage.estimatedCostUsd.toFixed(4)})`);
 }
-
 await client.shutdown();
 ```
 
-This example shows: OpenAI as primary with Anthropic fallback, a $0.50 workflow cost cap, 10-call limit, and loop detection that blocks after 3 identical consecutive tool calls — all in enforce mode.
+Run with `OPENAI_API_KEY` set. Turns 1–3 go through, turn 4 returns a blocked result with a recovery plan instead of throwing. Your agent can use `r.recovery.suggestion` to decide what to do next — try a different tool, modify arguments, or escalate to the user.
 
 ## Supported providers
 
@@ -406,7 +377,21 @@ const client = createTestClient({
 const result = await client.run({ messages: [{ role: "user", content: "Hi" }] });
 ```
 
-## Release scope — v1.0.1
+## Roadmap
+
+**Just shipped in v1.0.2:** Structured loop recovery.
+
+When Loret blocks a loop, `run()` now returns a recovery plan (`staleTool`, `staleArgs`, `suggestion`) instead of only throwing. That gives the agent a structured way to try a different approach.
+
+**What should we build next?** [Vote or suggest features](https://github.com/loret-sdk/sdk/discussions)
+
+- **Response caching** — skip duplicate prompt+model calls to save cost in retry-heavy workflows
+- **Streaming support** — `client.stream()` with guard enforcement during streaming
+- **Semantic loop detection** — catch paraphrased loops, not just exact repeats
+
+**Building something with Loret?** [Open a discussion](https://github.com/loret-sdk/sdk/discussions) — feedback, rough edges, and feature requests directly shape what gets built next.
+
+## Release scope — v1.0.2
 
 This release supports **local provider configuration only**. HTTP-backed control plane integration (remote policy fetch, telemetry ingest) is not yet available.
 

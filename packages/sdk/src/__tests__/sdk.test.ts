@@ -22,7 +22,7 @@ import {
 } from "../errors.js";
 import { WorkflowGuardStore } from "../guardrails/workflow-guard.js";
 import { LoopGuardStore } from "../guardrails/loop-guard.js";
-import { LoopGuardExceededError } from "../errors.js";
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3271,7 +3271,7 @@ describe("Scenario 12: Loop guard — via run()", () => {
     resultStatus: "empty" as const,
   };
 
-  it("throws LoopGuardExceededError in enforce mode after classAConsecutive identical signals", async () => {
+  it("returns blocked result with recovery in enforce mode after classAConsecutive identical signals", async () => {
     const provider = new MockProvider({ name: "openai", response: "ok" });
     const transport = new NoopTelemetryTransport();
     const traceId = "loop-test-1";
@@ -3292,16 +3292,14 @@ describe("Scenario 12: Loop guard — via run()", () => {
     await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
     await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
 
-    // T4 = Class A #3 → blocked
-    await assert.rejects(
-      () => client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL }),
-      (err: unknown) => {
-        assert.ok(err instanceof LoopGuardExceededError);
-        assert.equal(err.code, "LOOP_GUARD_EXCEEDED");
-        assert.equal(err.consecutiveClassA, 3);
-        return true;
-      },
-    );
+    // T4 = Class A #3 → blocked with recovery
+    const result = await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+    assert.equal(result.blocked, true);
+    assert.ok(result.recovery);
+    assert.equal(result.recovery.staleTool, LOOP_SIGNAL.toolName);
+    assert.equal(result.recovery.consecutiveCount, 3);
+    assert.ok(["try_different_tool", "modify_args", "escalate_to_user"].includes(result.recovery.suggestion));
+    assert.equal(result.content, "");
 
     await client.shutdown();
     assert.equal(provider.getCallCount(), 3, "adapter called for allowed turns only");
@@ -3326,16 +3324,13 @@ describe("Scenario 12: Loop guard — via run()", () => {
     await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
     await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
 
-    await assert.rejects(
-      () => client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL }),
-      (err: unknown) => err instanceof LoopGuardExceededError,
-    );
+    const result = await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+    assert.equal(result.blocked, true);
 
     await client.shutdown();
 
     const types = eventTypes(transport);
     assert.ok(types.includes("loop_guard_blocked"), "loop_guard_blocked event must be emitted");
-    assert.ok(types.includes("request_failed"), "request_failed must follow loop_guard_blocked");
   });
 
   it("allows run() in monitor mode despite loop violation and emits telemetry", async () => {
@@ -3430,16 +3425,14 @@ describe("Scenario 12: Loop guard — via run()", () => {
     });
 
     const call = () => client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
-    const results = await Promise.allSettled([call(), call(), call(), call(), call()]);
+    const results = await Promise.all([call(), call(), call(), call(), call()]);
     await client.shutdown();
 
-    const succeeded = results.filter((r) => r.status === "fulfilled").length;
-    const blocked   = results.filter(
-      (r) => r.status === "rejected" && (r.reason instanceof LoopGuardExceededError),
-    ).length;
+    const allowed = results.filter((r) => !r.blocked).length;
+    const blocked = results.filter((r) => r.blocked === true).length;
 
     // T1=baseline, T2=ClassA#1, T3=ClassA#2 → 3 succeed; T4 and T5 both blocked
-    assert.equal(succeeded, classAConsecutive, `exactly ${classAConsecutive} calls must succeed`);
+    assert.equal(allowed, classAConsecutive, `exactly ${classAConsecutive} calls must succeed`);
     assert.equal(blocked, 2, "remaining calls must be blocked by the loop guard");
   });
 
