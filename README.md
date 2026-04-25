@@ -45,7 +45,6 @@ await loret.shutdown();
 - [Features](#features)
 - [Why Loret](#why-loret)
 - [How It Works](#how-it-works)
-- [Installation](#installation)
 - [Configuration](#configuration)
 - [Examples](#examples)
 - [Telemetry & Observability](#telemetry--observability)
@@ -93,14 +92,6 @@ It automatically:
 - Stops the agent and gives you a clear reason why
 
 All in-process. No proxy. No added network hop.
-
----
-
-## Installation
-
-```bash
-npm install @loret/sdk
-```
 
 ---
 
