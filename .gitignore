@@ -17,6 +17,9 @@ node_modules/
 .turbo/
 .pnpm-store/
 
+# Assets
+demo.gif
+
 # OS / editor
 .DS_Store
 .vscode/

@@ -1,0 +1,52 @@
+{
+  "name": "@loret/langchain",
+  "description": "LangChain integration for Loret — automatic loop detection and budget guardrails for LangChain agents",
+  "license": "MIT",
+  "version": "1.0.2",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loret-sdk/sdk.git"
+  },
+  "keywords": [
+    "loret",
+    "langchain",
+    "guardrails",
+    "loop-detection",
+    "agent",
+    "llm",
+    "cost-control",
+    "budget"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx/esm --test src/__tests__/handler.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@loret/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3.0"
+  },
+  "devDependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/openai": "^1.4.4",
+    "@types/node": "^22.19.17",
+    "langchain": "^1.3.4"
+  }
+}

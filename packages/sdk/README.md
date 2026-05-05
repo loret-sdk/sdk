@@ -1,90 +1,94 @@
 # @loret/sdk
 
-Runtime policy layer for LLM applications. Loret enforces cost budgets, privacy controls, agentic loop detection, retry/fallback routing, and runtime guardrails on every model call — in-process, with no proxy or external service.
+> The runtime reliability layer for AI agents.
 
-Without a control layer, agents burn money in loops, retries mask provider failures, sensitive data leaks into prompts, and cost limits only exist on paper. Loret makes every `run()` call pass through policy enforcement before a single token is spent.
+- Stops repeated tool-call loops
+- Prevents silent task failure
+- Runs in-process, no proxy
 
-## Stability
+**A stuck agent doesn't just waste money — it fails the task. Loret catches the loop so the agent can recover or escalate.**
 
-`@loret/sdk@1.0.2` is production-ready. Validated against OpenAI (`gpt-4o-mini`, `gpt-4o`) and Anthropic (`claude-haiku-4-5`, `claude-sonnet-4-6`) across 50 probe scenarios and 157 unit tests.
+### Quick Start
 
-## What Loret is NOT
+**LangChain** — one call, Loret handles the rest:
 
-- Not a proxy — runs fully in-process, no added network hop
-- Not a hosted service — no data leaves your application
-- Not an LLM wrapper — your provider SDK handles the actual API call
-- Not opinionated about your stack — works with any Node.js application
+```bash
+npm install @loret/langchain @loret/sdk
+```
 
-## Installation
+```ts
+import { guard } from "@loret/langchain";
 
-```sh
+const agent = guard(createReactAgent, { llm, tools: [deployService, checkHealth] });
+await agent.invoke({ messages });
+```
+
+**Vercel AI SDK** — one call, Loret wraps the model:
+
+```bash
+npm install @loret/vercel @loret/sdk ai
+```
+
+```ts
+import { guard } from "@loret/vercel";
+
+const model = await guard(openai("gpt-4.1"));
+const result = await generateText({ model, tools, prompt });
+```
+
+**No framework** — wrap any async function:
+
+```bash
 npm install @loret/sdk
 ```
 
-## Quick start
-
-The simplest configuration: a single provider with a per-call budget cap. For multi-turn agents with fallback routing, workflow limits, and loop detection, see the [agent example](#agent-example) below.
-
 ```ts
-import { Loret } from "@loret/sdk";
-import { OpenAIAdapter } from "@loret/sdk/providers/openai";
+import { loret } from "@loret/sdk";
 
-const client = new Loret({
-  projectId: "my-project",
-  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
-  providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1 }],
-  mode: "enforce",
-  budgetLimits: [{ scope: "per_call", maxCostUsd: 0.05 }],
-});
+const session = loret();
+const safeCheck = session.guard(checkHealth);
 
-const result = await client.run({
-  messages: [{ role: "user", content: "Hello" }],
-  maxTokens: 256,
-});
-
-console.log(result.content);
-await client.shutdown();
+const result = await safeCheck("payments-api");
+session.reset();
 ```
 
-## Agent example
+---
 
-Copy, paste, run. This simulates an agent stuck in a loop — Loret detects it and returns a structured recovery plan. Costs < $0.01.
+## Features
 
-```ts
-import { Loret } from "@loret/sdk";
-import { OpenAIAdapter } from "@loret/sdk/providers/openai";
-import type { LoopSignal } from "@loret/sdk";
+- **Loop Detection & Recovery** — Detects repeating tool calls and breaks the loop so the agent can recover or escalate
+- **Hard Budget Limits** — Per call, per trace, and per workflow
+- **Retry & Fallback** — Automatic fallback across providers
+- **Framework Integrations** — Drop-in support for [LangChain](https://www.npmjs.com/package/@loret/langchain) and [Vercel AI SDK](https://www.npmjs.com/package/@loret/vercel)
+- **PII Protection** — Detects, redacts, or blocks sensitive data
+- **In-Process** — No proxy, no extra network hop, near-zero latency
 
-const client = new Loret({
-  projectId: "demo",
-  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
-  providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1, inputUsdPer1kTokens: 0.00015, outputUsdPer1kTokens: 0.0006 }],
-  mode: "enforce",
-  workflowGuards: { maxCallsPerWorkflow: 10, maxCostPerWorkflowUsd: 0.50 },
-  loopGuards: { classAConsecutive: 3 },
-});
+---
 
-const stuckSignal: LoopSignal = {
-  toolName: "search_db", toolArgs: '{"q":"users"}',
-  toolResult: "[]", resultStatus: "empty",
-};
+## How It Works
 
-for (let turn = 1; turn <= 6; turn++) {
-  const r = await client.run({
-    messages: [{ role: "user", content: "Find user records." }],
-    maxTokens: 50, metadata: { traceId: "demo-1" }, loopSignal: stuckSignal,
-  });
-  if (r.blocked) {
-    console.log(`Turn ${turn}: BLOCKED — suggestion: ${r.recovery!.suggestion}`);
-    console.log("Recovery context:", JSON.stringify(r.recovery, null, 2));
-    break;
-  }
-  console.log(`Turn ${turn}: allowed ($${r.usage.estimatedCostUsd.toFixed(4)})`);
-}
-await client.shutdown();
-```
+Loret wraps your agent's tools (LangChain) or model (Vercel AI SDK) and watches every tool call.
 
-Run with `OPENAI_API_KEY` set. Turns 1–3 go through, turn 4 returns a blocked result with a recovery plan instead of throwing. Your agent can use `r.recovery.suggestion` to decide what to do next — try a different tool, modify arguments, or escalate to the user.
+1. Agent calls a tool normally
+2. Loret fingerprints the call — tool name, arguments, result
+3. If the fingerprint matches a loop pattern, Loret replaces the result with a recovery message
+4. The agent reads it, changes approach, and continues
+
+No crash, no manual intervention. The agent self-corrects.
+
+---
+
+## How Loop Detection Works
+
+**Class A — Exact Stagnation**
+Same tool + same inputs + same result across consecutive turns → blocked deterministically
+
+**Class B — Unsuccessful Exploration**
+Same tool + different inputs + repeated failures → blocked after threshold (4 failures with 2+ distinct args, or 4 failures with identical error). Per-tool sliding window; a success clears the window.
+
+No embeddings, no LLM calls, no semantic guesswork. Deterministic and fast.
+
+---
 
 ## Supported providers
 
@@ -92,6 +96,7 @@ Run with `OPENAI_API_KEY` set. Turns 1–3 go through, turn 4 returns a blocked 
 |---|---|
 | `@loret/sdk/providers/openai` | `OpenAIAdapter` |
 | `@loret/sdk/providers/anthropic` | `AnthropicAdapter` |
+| `@loret/sdk/providers/custom` | `CustomAdapter` |
 
 ## Guardrails
 
@@ -178,15 +183,15 @@ Throws `WorkflowGuardExceededError` in enforce mode.
 
 ### Loop detection
 
-Content-aware agentic loop detection based on tool call fingerprinting. Detects two stagnation patterns:
-
-- **Class A — exact stagnation**: the same `toolName`, same arguments, and same result appear on consecutive turns. Blocks the workflow after `classAConsecutive` consecutive identical turns (default: 3).
-- **Class B — unsuccessful exploration**: same `toolName`, varying arguments, repeated `empty`/`error` results. Suspicion accumulates but **Class B never blocks alone** — it is an informational signal only.
+See [How Loop Detection Works](#how-loop-detection-works) for the detection model. Configuration:
 
 ```ts
 loopGuards: {
-  classAConsecutive: 3,  // block after 3 consecutive identical tool calls
-  windowSize: 5,         // sliding window of recent turns (default: 5)
+  classAConsecutive: 3,    // block after 3 consecutive identical tool calls
+  classBSuspicion: 4,      // block after 4 failures in per-tool window
+  classBToolWindow: 6,     // per-tool sliding window size (default: 6)
+  classBDistinctArgs: 2,   // min distinct args for Class B path (a)
+  windowSize: 12,          // global sliding window (default: 12)
 }
 ```
 
@@ -213,8 +218,6 @@ Throws `LoopGuardExceededError` in enforce mode. The error carries `consecutiveC
 - The SDK fingerprints `toolArgs` and `toolResult` internally using FNV1a32. Do not pre-hash.
 
 **Known limitation — rotating tool loops:** If an agent cycles through multiple different tool names each turn (e.g. `tool_a` -> `tool_b` -> `tool_c` -> repeat), with all calls failing, neither Class A nor Class B fires. The `workflowGuards.maxCallsPerWorkflow` limit is the backstop for this case.
-
-> See the [agent example](#agent-example) for a complete multi-turn loop with error handling.
 
 ### Cost estimation and pricing
 
@@ -260,7 +263,11 @@ The `mode` field controls how budget, trace, workflow, and loop guardrails respo
 
 Example: `mode: "monitor"` with `privacy.mode: "block"` means budget and guard violations are observed only, but requests containing PII are still hard-blocked.
 
-## Error types
+## Error Handling
+
+The `guard()` and `loret()` APIs handle loop recovery automatically — loops are resolved, not thrown. If the agent ignores recovery and keeps looping, Loret terminates the run with an error.
+
+For the low-level `Loret` client, all errors extend `LoretError` with a `code` field:
 
 | Class | Code | When thrown |
 |---|---|---|
@@ -269,7 +276,7 @@ Example: `mode: "monitor"` with `privacy.mode: "block"` means budget and guard v
 | `AllProvidersFailedError` | `ALL_PROVIDERS_FAILED` | All providers exhausted after retries and fallback |
 | `TraceGuardExceededError` | `TRACE_GUARD_EXCEEDED` | Trace guard limit reached (enforce mode) |
 | `WorkflowGuardExceededError` | `WORKFLOW_GUARD_EXCEEDED` | Workflow guard limit reached (enforce mode) |
-| `LoopGuardExceededError` | `LOOP_GUARD_EXCEEDED` | Loop detected via Class A fingerprint (enforce mode). Carries `consecutiveClassA` and `suspicion` |
+| `LoopGuardExceededError` | `LOOP_GUARD_EXCEEDED` | Loop detected via Class A or Class B (enforce mode). Carries `consecutiveClassA` and `suspicion` |
 | `InvalidTraceGuardConfigError` | `INVALID_TRACE_GUARD_CONFIG` | Negative trace guard limit configured |
 | `PolicyUnavailableError` | `POLICY_UNAVAILABLE` | No providers configured |
 | `ProviderTimeoutError` | `PROVIDER_TIMEOUT` | Provider exceeded timeout |
@@ -323,9 +330,26 @@ const client = new Loret({
 
 Cross-instance cost, duration, and loop detection state are not yet supported. Use `maxCallsPerWorkflow` as the distributed backstop.
 
-## Telemetry
+## Telemetry & Observability
 
-Events are buffered in-process and flushed **asynchronously** — non-blocking, fire-and-forget. Telemetry never adds latency to request execution. Emitted event types:
+Loret logs detection events and a run summary to the console — enabled by default.
+
+```
+🔄 [Loret] Loop detected: check_deploy_status() (3 consecutive calls with same args)
+
+✅ [Loret] Run completed
+   • Tool calls: 7 executed, 2 blocked
+   • Loops caught: 1
+   • Actions taken: 1 recovery
+   • Estimated savings: ~5 calls
+   • Final status: Recovery successful
+```
+
+Only meaningful events are printed — no per-tool-call noise. Disable with `verbose: false` in options.
+
+### Structured telemetry
+
+The `Loret` client also emits structured events asynchronously for integration with external observability tools. Events are buffered in-process and flushed **asynchronously** — non-blocking, fire-and-forget. Telemetry never adds latency to request execution. Emitted event types:
 
 | Event | When emitted |
 |---|---|
@@ -336,7 +360,7 @@ Events are buffered in-process and flushed **asynchronously** — non-blocking, 
 | `budget_blocked` | Budget limit exceeded (both modes) |
 | `trace_guard_blocked` | Trace guard limit exceeded (both modes). Includes `guardDimension`: `"calls"` \| `"cost"` \| `"duration"` |
 | `workflow_guard_blocked` | Workflow guard limit exceeded (both modes). Includes `guardDimension` |
-| `loop_guard_blocked` | Class A loop detected (both modes). Includes `guardDimension: "class_a"` |
+| `loop_guard_blocked` | Loop detected via Class A or Class B (both modes). Includes `guardDimension: "class_a"` or `"class_b"` |
 | `privacy_detected` | PII found in outbound content (all privacy modes except `"off"`) |
 
 Call `client.shutdown()` before process exit to flush buffered events.
@@ -377,23 +401,21 @@ const client = createTestClient({
 const result = await client.run({ messages: [{ role: "user", content: "Hi" }] });
 ```
 
+## Guarantees & Limitations
+
+- Cost is estimated pre-dispatch (not billing-accurate)
+- PII detection is pattern-based (not semantic)
+- Budget limits are per process unless backed by external state
+
+These are deliberate tradeoffs that keep the runtime fast, predictable, and reliable.
+
 ## Roadmap
 
-**Just shipped in v1.0.2:** Structured loop recovery.
-
-When Loret blocks a loop, `run()` now returns a recovery plan (`staleTool`, `staleArgs`, `suggestion`) instead of only throwing. That gives the agent a structured way to try a different approach.
-
-**What should we build next?** [Vote or suggest features](https://github.com/loret-sdk/sdk/discussions)
-
+- **Pluggable observability** — pipe events to Datadog, Grafana, or your own logger
 - **Response caching** — skip duplicate prompt+model calls to save cost in retry-heavy workflows
 - **Streaming support** — `client.stream()` with guard enforcement during streaming
-- **Semantic loop detection** — catch paraphrased loops, not just exact repeats
 
-**Building something with Loret?** [Open a discussion](https://github.com/loret-sdk/sdk/discussions) — feedback, rough edges, and feature requests directly shape what gets built next.
-
-## Release scope — v1.0.2
-
-This release supports **local provider configuration only**. HTTP-backed control plane integration (remote policy fetch, telemetry ingest) is not yet available.
+[Vote or suggest features](https://github.com/loret-sdk/sdk/discussions)
 
 ## License
 

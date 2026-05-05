@@ -263,6 +263,18 @@ export class Loret {
         );
         if (policy.mode === "enforce") {
           if (budgetAllowed) this.budgetManager.rollbackReservation(estimate);
+
+          if (loopResult.dimension === "hard_stop") {
+            this.flusher.emit(
+              event(requestId, traceId, policy.projectId, "request_failed", {
+                errorCode: "LOOP_GUARD_EXCEEDED",
+                latencyMs: Date.now() - startedAt,
+                metadata: options.metadata,
+              }),
+            );
+            throw new LoopGuardExceededError(loopResult.reason, loopResult.consecutiveClassA, loopResult.suspicion);
+          }
+
           const recovery = buildLoopRecovery(options.loopSignal, loopResult.consecutiveClassA);
           return {
             content: "",
