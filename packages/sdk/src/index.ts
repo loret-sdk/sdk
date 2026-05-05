@@ -14,6 +14,8 @@ export { ProviderError } from "./providers/adapter";
 
 export { OpenAIAdapter } from "./providers/openai";
 export { AnthropicAdapter } from "./providers/anthropic";
+export { CustomAdapter } from "./providers/custom";
+export type { CustomAdapterOptions, CustomExecuteInput, CustomExecuteResult } from "./providers/custom";
 
 export {
   LoretError,
@@ -49,3 +51,8 @@ export type {
 } from "./shared";
 
 export type { LoopSignal } from "./guardrails/loop-guard";
+export { LoopGuardStore } from "./guardrails/loop-guard";
+export type { LoopGuardCheckResult, LoopGuardViolation } from "./guardrails/loop-guard";
+
+export { loret } from "./session";
+export type { LoretSession, LoretSessionOptions } from "./session";

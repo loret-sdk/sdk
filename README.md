@@ -1,52 +1,71 @@
 # Loret
 
-**Stop your agents from quietly burning money.**
+> The runtime reliability layer for AI agents.
 
-When an agent gets stuck in a loop — repeating the same tool call over and over — costs spiral before anyone notices.
+- Stops repeated tool-call loops
+- Prevents silent task failure
+- Runs in-process, no proxy
 
-Loret is a **lightweight, in-process runtime guardrail SDK** that catches this automatically.
-
-- Zero proxy
-- Zero extra latency
-- Works with any LLM framework
+**A stuck agent doesn't just waste money — it fails the task. Loret catches the loop so the agent can recover or escalate.**
 
 ### Quick Start
+
+**LangChain** — one call, Loret handles the rest:
+
+```bash
+npm install @loret/langchain @loret/sdk
+```
+
+```ts
+import { guard } from "@loret/langchain";
+
+const agent = guard(createReactAgent, { llm, tools: [deployService, checkHealth] });
+await agent.invoke({ messages });
+```
+
+**Vercel AI SDK** — one call, Loret wraps the model:
+
+```bash
+npm install @loret/vercel @loret/sdk ai
+```
+
+```ts
+import { guard } from "@loret/vercel";
+
+const model = await guard(openai("gpt-4.1"));
+const result = await generateText({ model, tools, prompt });
+```
+
+**No framework** — wrap any async function:
 
 ```bash
 npm install @loret/sdk
 ```
 
 ```ts
-import { Loret } from "@loret/sdk";
-import { OpenAIAdapter } from "@loret/sdk/providers/openai";
+import { loret } from "@loret/sdk";
 
-const loret = new Loret({
-  projectId: "my-agent",
-  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
-  providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1 }],
-  budgetLimits: [{ scope: "per_call", maxCostUsd: 0.05 }],
-  loopGuards: { classAConsecutive: 3 },
-  mode: "enforce",
-});
+const session = loret();
+const safeCheck = session.guard(checkHealth);
 
-const result = await loret.run({
-  messages: [{ role: "user", content: "Hello" }],
-  maxTokens: 256,
-});
-
-console.log(result.content);
-await loret.shutdown();
+const result = await safeCheck("payments-api");
+session.reset();
 ```
 
 ---
 
+**Use Loret if your agents:**
+- repeat the same tool calls
+- burn budget without making progress
+- fail silently instead of escalating clearly
 ## Table of Contents
 
 - [Features](#features)
+- [LangChain Integration](#langchain-integration)
+- [Vercel AI SDK Integration](#vercel-ai-sdk-integration)
 - [Why Loret](#why-loret)
 - [How It Works](#how-it-works)
-- [Configuration](#configuration)
-- [Examples](#examples)
+- [How Loop Detection Works](#how-loop-detection-works)
 - [Telemetry & Observability](#telemetry--observability)
 - [Error Handling](#error-handling)
 - [Roadmap](#roadmap)
@@ -56,11 +75,108 @@ await loret.shutdown();
 
 ## Features
 
-- **Loop Detection** — Stops agents repeating identical tool calls
+- **Loop Detection & Recovery** — Detects repeating tool calls and breaks the loop so the agent can recover or escalate
 - **Hard Budget Limits** — Per call, per trace, and per workflow
-- **PII Protection** — Detects, redacts, or blocks sensitive data
 - **Retry & Fallback** — Automatic fallback across providers
+- **Framework Integrations** — Drop-in support for [LangChain](#langchain-integration) and [Vercel AI SDK](#vercel-ai-sdk-integration)
+- **PII Protection** — Detects, redacts, or blocks sensitive data
 - **In-Process** — No proxy, no extra network hop, near-zero latency
+
+---
+
+## LangChain Integration
+
+```bash
+npm install @loret/langchain @loret/sdk
+```
+
+```ts
+import { guard } from "@loret/langchain";
+
+const agent = guard(createReactAgent, { llm, tools: [deployService, checkHealth] });
+await agent.invoke({ messages });
+```
+
+`guard()` wraps your tools, creates the agent, and injects callbacks — you just call `.invoke()`. For advanced options (custom recovery messages, budget limits, lifecycle hooks), use `LoretCallbackHandler` directly:
+
+<details>
+<summary>Advanced usage</summary>
+
+```ts
+import { LoretCallbackHandler } from "@loret/langchain";
+
+const handler = new LoretCallbackHandler({
+  loopGuards: { classAConsecutive: 3 },
+  onBlocked: (reason) => console.log(reason),
+  recoveryMessage: "Try a different approach.",
+});
+
+const agent = createReactAgent({
+  llm,
+  tools: handler.wrapTools([deployService, checkHealth]),
+});
+
+await agent.invoke({ messages }, { callbacks: [handler] });
+```
+
+</details>
+
+When the agent loops, Loret injects a recovery message as a tool result. The agent reads it and switches tools, changes arguments, or informs the user — instead of retrying forever.
+
+```
+check_health("payments-api") → timeout
+check_health("payments-api") → timeout
+check_health("payments-api") → timeout
+check_health("payments-api") → [LORET] Loop detected. Try a different tool.
+get_deploy_status("payments-api") → success ✓
+"payments-api v2.4.1 is running but health checks are failing on /ready..."
+```
+
+Without Loret: 10 calls, task failed. With Loret: 4 + 1 recovery, task completed.
+
+See the full [`@loret/langchain` docs](packages/langchain/README.md).
+
+---
+
+## Vercel AI SDK Integration
+
+```bash
+npm install @loret/vercel @loret/sdk ai
+```
+
+```ts
+import { guard } from "@loret/vercel";
+
+const model = await guard(openai("gpt-4.1"));
+const result = await generateText({ model, tools, prompt });
+```
+
+`guard()` wraps your model with loop detection middleware — you just pass it to `generateText()`. For advanced options (custom recovery messages, lifecycle hooks), use `loretMiddleware` directly:
+
+<details>
+<summary>Advanced usage</summary>
+
+```ts
+import { loretMiddleware } from "@loret/vercel";
+import { generateText, wrapLanguageModel } from "ai";
+
+const model = wrapLanguageModel({
+  model: openai("gpt-4.1"),
+  middleware: loretMiddleware({
+    loopGuards: { classAConsecutive: 3 },
+    onBlocked: (reason) => console.log(reason),
+    recoveryMessage: "Try a different approach.",
+  }),
+});
+
+const result = await generateText({ model, tools, prompt });
+```
+
+</details>
+
+Loret intercepts at the prompt level — when a loop is detected, the recovery message is injected before the next LLM call. The agent reads it and changes approach.
+
+See the full [`@loret/vercel` docs](packages/vercel/README.md).
 
 ---
 
@@ -79,103 +195,24 @@ Most guardrail solutions add latency and complexity. Loret runs inside your appl
 
 ## How It Works
 
-Loret sits directly inside your process and watches every tool call your agent makes.
+Loret wraps your agent's tools (LangChain) or model (Vercel AI SDK) and watches every tool call.
 
-```
-App → Loret → Guardrails → Routing → Provider
-```
+1. Agent calls a tool normally
+2. Loret fingerprints the call — tool name, arguments, result
+3. If the fingerprint matches a loop pattern, Loret replaces the result with a recovery message
+4. The agent reads it, changes approach, and continues
 
-It automatically:
-
-- Detects repeating tool calls (loops)
-- Enforces hard budget limits
-- Stops the agent and gives you a clear reason why
-
-All in-process. No proxy. No added network hop.
+No crash, no manual intervention. The agent self-corrects.
 
 ---
 
-## Configuration
-
-```ts
-const loret = new Loret({
-  projectId: "my-agent",
-  mode: "enforce",                        // "monitor" or "enforce"
-  adapters: [
-    new OpenAIAdapter(process.env.OPENAI_API_KEY!),
-    new AnthropicAdapter(process.env.ANTHROPIC_API_KEY!),
-  ],
-  providers: [
-    { provider: "openai",    model: "gpt-4o-mini",   priority: 1 },
-    { provider: "anthropic", model: "claude-haiku",   priority: 2 },
-  ],
-  budgetLimits: [
-    { scope: "per_call", maxCostUsd: 0.05 },
-  ],
-  loopGuards: {
-    classAConsecutive: 3,                 // block after 3 identical calls
-  },
-});
-```
-
-**Adapters** connect Loret to a provider's API (`OpenAIAdapter`, `AnthropicAdapter`). **Providers** define which models to use and in what order — Loret routes and falls back automatically.
-
-See the full [configuration reference](packages/sdk/README.md#configuration-reference) for all options.
-
----
-
-## Examples
-
-### Agent loop detection
-
-This simulates an agent stuck in a loop — Loret detects it and returns a structured recovery plan. Costs < $0.01.
-
-```ts
-import { Loret } from "@loret/sdk";
-import { OpenAIAdapter } from "@loret/sdk/providers/openai";
-import type { LoopSignal } from "@loret/sdk";
-
-const client = new Loret({
-  projectId: "demo",
-  adapters: [new OpenAIAdapter(process.env.OPENAI_API_KEY!)],
-  providers: [{ provider: "openai", model: "gpt-4o-mini", priority: 1 }],
-  mode: "enforce",
-  workflowGuards: { maxCallsPerWorkflow: 10, maxCostPerWorkflowUsd: 0.50 },
-  loopGuards: { classAConsecutive: 3 },
-});
-
-const stuckSignal: LoopSignal = {
-  toolName: "search_db",
-  toolArgs: '{"q":"users"}',
-  toolResult: "[]",
-  resultStatus: "empty",
-};
-
-for (let turn = 1; turn <= 6; turn++) {
-  const r = await client.run({
-    messages: [{ role: "user", content: "Find user records." }],
-    maxTokens: 50,
-    metadata: { traceId: "demo-1" },
-    loopSignal: stuckSignal,
-  });
-  if (r.blocked) {
-    console.log(`Turn ${turn}: BLOCKED — ${r.recovery!.suggestion}`);
-    break;
-  }
-  console.log(`Turn ${turn}: allowed ($${r.usage.estimatedCostUsd.toFixed(4)})`);
-}
-await client.shutdown();
-```
-
-Turns 1–3 go through. Turn 4 returns a blocked result with a recovery plan — your agent can use `r.recovery.suggestion` to try a different approach.
-
-### How loop detection works
+## How Loop Detection Works
 
 **Class A — Exact Stagnation**
 Same tool + same inputs + same result across consecutive turns → blocked deterministically
 
 **Class B — Unsuccessful Exploration**
-Same tool + different inputs + repeated empty/error results → tracked as suspicion (does not block alone)
+Same tool + different inputs + repeated failures → blocked after threshold (4 failures with 2+ distinct args, or 4 failures with identical error). Per-tool sliding window; a success clears the window.
 
 No embeddings, no LLM calls, no semantic guesswork. Deterministic and fast.
 
@@ -183,61 +220,59 @@ No embeddings, no LLM calls, no semantic guesswork. Deterministic and fast.
 
 ## Error Handling
 
-All errors extend `LoretError` and expose a `code` field for structured handling.
+The `guard()` and `loret()` APIs handle loop recovery automatically — loops are resolved, not thrown. If the agent ignores recovery and keeps looping, Loret terminates the run with an error.
+
+For the low-level `Loret` SDK client, all errors extend `LoretError` with a `code` field:
 
 | Error | When |
 |---|---|
 | `BudgetExceededError` | Budget limit reached |
-| `LoopGuardExceededError` | Loop detected (Class A) |
+| `LoopGuardExceededError` | Loop detected |
 | `PiiBlockedError` | PII detected in block mode |
 | `AllProvidersFailedError` | All providers exhausted after retries |
-| `WorkflowGuardExceededError` | Workflow guard limit reached |
-| `TraceGuardExceededError` | Trace guard limit reached |
-
-In `"monitor"` mode, violations emit telemetry but the request proceeds. In `"enforce"` mode, violations throw.
 
 ---
 
 ## Telemetry & Observability
 
-Loret emits structured events asynchronously — non-blocking, fire-and-forget. Telemetry never adds latency to request execution.
+Loret logs detection events and a run summary to the console — enabled by default.
 
-Use `"monitor"` mode to observe guardrail behavior in production before enabling enforcement:
+```
+🔄 [Loret] Loop detected: check_deploy_status() (3 consecutive calls with same args)
 
-```ts
-const loret = new Loret({
-  // ...
-  mode: "monitor",
-});
-
-// Violations emit telemetry but the request still goes through:
-// {
-//   type: "loop_guard_blocked",
-//   projectId: "my-agent",
-//   traceId: "workflow-1",
-//   guardDimension: "class_a",
-//   timestamp: "2026-04-24T14:32:01.000Z"
-// }
+✅ [Loret] Run completed
+   • Tool calls: 7 executed, 2 blocked
+   • Loops caught: 1
+   • Actions taken: 1 recovery
+   • Estimated savings: ~5 calls
+   • Final status: Recovery successful
 ```
 
-Emitted events: `request_started`, `request_completed`, `request_failed`, `fallback_triggered`, `budget_blocked`, `loop_guard_blocked`, `privacy_detected`, and more.
+Only meaningful events are printed — no per-tool-call noise. Disable with `verbose: false` in options.
+
+<details>
+<summary>Structured telemetry (low-level SDK)</summary>
+
+The `Loret` client emits structured events asynchronously for integration with external observability tools:
+
+```ts
+const client = new Loret({ mode: "monitor" });
+
+// Emitted events: request_started, request_completed, request_failed,
+// fallback_triggered, budget_blocked, loop_guard_blocked, and more.
+```
 
 Call `client.shutdown()` before process exit to flush buffered events.
 
-> **Coming soon:** A pluggable observability API (`loret.on("violation", ...)`) for piping events directly to Datadog, Grafana, or your own logger. See [Roadmap](#roadmap).
+</details>
 
 ---
 
 ## Roadmap
 
-**v1.0.2 (current):** Structured loop recovery — when Loret blocks a loop, `run()` returns a recovery plan instead of only throwing.
-
-**Next:**
-
-- **Pluggable observability** — `loret.on("violation", ...)` to pipe events to Datadog, Grafana, or your own logger
+- **Pluggable observability** — pipe events to Datadog, Grafana, or your own logger
 - **Response caching** — skip duplicate prompt+model calls
-- **Streaming support** — `client.stream()` with guard enforcement
-- **Semantic loop detection** — catch paraphrased loops, not just exact repeats
+- **Streaming support** — guard enforcement on streamed responses
 
 [Vote or suggest features →](https://github.com/loret-sdk/sdk/discussions)
 

@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import type { RuntimeEvent, RuntimeEventType } from "../shared.js";
+import type { RunResult } from "../types.js";
 
 import { checkPrivacy } from "../interceptor/pii.js";
 import { TelemetryFlusher } from "../telemetry/flusher.js";
@@ -19,6 +20,7 @@ import {
   TraceGuardExceededError,
   InvalidTraceGuardConfigError,
   WorkflowGuardExceededError,
+  LoopGuardExceededError,
 } from "../errors.js";
 import { WorkflowGuardStore } from "../guardrails/workflow-guard.js";
 import { LoopGuardStore } from "../guardrails/loop-guard.js";
@@ -3140,15 +3142,171 @@ describe("Scenario 11: LoopGuardStore — unit tests", () => {
     assert.equal(rProgress.consecutiveClassA, 0, "chain must reset to 0");
   });
 
-  it("Class B accumulates suspicion but never blocks", () => {
+  it("Class B uses default threshold of 4 when not explicitly configured", () => {
     const store = new LoopGuardStore();
 
-    // Same tool, different args each turn, all empty → Class B each time
-    for (let i = 0; i < 10; i++) {
+    // Default classBSuspicion = 4, classBDistinctArgs = 2
+    // First 3 failures should be allowed, 4th should block
+    const results = [];
+    for (let i = 0; i < 5; i++) {
       const signal = { toolName: "query_db", toolArgs: `{"offset":${i * 100}}`, toolResult: "[]", resultStatus: "empty" as const };
-      const r = store.check("wf-c", signal, {});
-      assert.ok(r.allowed, `turn ${i + 1} must be allowed — Class B never blocks`);
+      results.push(store.check("wf-c", signal, {}));
     }
+
+    assert.ok(results[0]!.allowed);
+    assert.ok(results[2]!.allowed);
+    assert.ok(!results[3]!.allowed, "4th failure should trigger Class B at default threshold");
+    assert.equal((results[3] as LoopGuardViolation).dimension, "class_b");
+  });
+
+  it("Class B blocks when failed turns with distinct args reach threshold", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 4, windowSize: 6 };
+
+    const results = [];
+    for (let i = 0; i < 5; i++) {
+      const signal = { toolName: "query_db", toolArgs: `{"q":"attempt-${i}"}`, toolResult: "[]", resultStatus: "empty" as const };
+      results.push(store.check("wf-cb", signal, guards));
+    }
+
+    // First 3 turns: allowed (below threshold — need 4 failed turns in window)
+    assert.ok(results[0]!.allowed);
+    assert.ok(results[1]!.allowed);
+    assert.ok(results[2]!.allowed);
+    // 4th turn: 4 failed turns with 4 distinct args in window → blocked
+    assert.ok(!results[3]!.allowed);
+    assert.equal((results[3] as LoopGuardViolation).dimension, "class_b");
+  });
+
+  it("Class B blocks on repeated failures with distinct args (non-consecutive)", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 10, classAConsecutive: 10 };
+
+    // Same tool, different args, interleaved with other tools so Class A chain breaks
+    store.check("wf-same", { toolName: "query_db", toolArgs: '{"q":"v1"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    store.check("wf-same", { toolName: "other_tool", toolArgs: '{"i":0}', toolResult: "{}", resultStatus: "success" as const }, guards);
+    store.check("wf-same", { toolName: "query_db", toolArgs: '{"q":"v2"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    store.check("wf-same", { toolName: "other_tool", toolArgs: '{"i":1}', toolResult: "{}", resultStatus: "success" as const }, guards);
+
+    // 3rd failure with 3rd distinct args → Class B fires
+    const r = store.check("wf-same", { toolName: "query_db", toolArgs: '{"q":"v3"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    assert.ok(!r.allowed);
+    assert.equal((r as LoopGuardViolation).dimension, "class_b");
+  });
+
+  it("Class B path (b) fires on stable result fingerprint even with same args", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 10, classAConsecutive: 10 };
+
+    // Same tool, same args, same result — interleaved so Class A doesn't fire
+    store.check("wf-no", { toolName: "query_db", toolArgs: '{"q":"same"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    store.check("wf-no", { toolName: "other_tool", toolArgs: '{"i":0}', toolResult: "{}", resultStatus: "success" as const }, guards);
+    store.check("wf-no", { toolName: "query_db", toolArgs: '{"q":"same"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    store.check("wf-no", { toolName: "other_tool", toolArgs: '{"i":1}', toolResult: "{}", resultStatus: "success" as const }, guards);
+    const r = store.check("wf-no", { toolName: "query_db", toolArgs: '{"q":"same"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+
+    // 3 failures, 1 distinct arg, but stable result fingerprint → path (b) fires
+    assert.ok(!r.allowed);
+    assert.equal((r as LoopGuardViolation).dimension, "class_b");
+  });
+
+  it("Class B does not fire when neither path applies", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 10, classAConsecutive: 10 };
+
+    // Same tool, 1 distinct arg, but DIFFERENT results each time → neither path
+    store.check("wf-neither", { toolName: "query_db", toolArgs: '{"q":"same"}', toolResult: '{"err":"timeout"}', resultStatus: "error" as const }, guards);
+    store.check("wf-neither", { toolName: "other_tool", toolArgs: '{"i":0}', toolResult: "{}", resultStatus: "success" as const }, guards);
+    store.check("wf-neither", { toolName: "query_db", toolArgs: '{"q":"same"}', toolResult: '{"err":"conn_refused"}', resultStatus: "error" as const }, guards);
+    store.check("wf-neither", { toolName: "other_tool", toolArgs: '{"i":1}', toolResult: "{}", resultStatus: "success" as const }, guards);
+    const r = store.check("wf-neither", { toolName: "query_db", toolArgs: '{"q":"same"}', toolResult: '{"err":"500"}', resultStatus: "error" as const }, guards);
+
+    // 3 failures, 1 distinct arg (path a fails), 3 distinct results (path b fails)
+    assert.ok(r.allowed, "neither path should trigger");
+  });
+
+  it("Class B does not block when turns are successful", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 6 };
+
+    for (let i = 0; i < 6; i++) {
+      const signal = { toolName: "query_db", toolArgs: `{"q":"v${i}"}`, toolResult: `[{"id":${i}}]`, resultStatus: "success" as const };
+      const r = store.check("wf-ok", signal, guards);
+      assert.ok(r.allowed, `turn ${i + 1} — successful turns should not trigger Class B`);
+    }
+  });
+
+  it("Class B resets per-tool counter on success", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 4, windowSize: 10 };
+
+    // 3 failed turns with distinct args
+    for (let i = 0; i < 3; i++) {
+      store.check("wf-reset", { toolName: "query_db", toolArgs: `{"q":"v${i}"}`, toolResult: "[]", resultStatus: "empty" as const }, guards);
+    }
+
+    // 1 successful turn for the same tool — resets its counter
+    store.check("wf-reset", { toolName: "query_db", toolArgs: '{"q":"found"}', toolResult: '[{"id":1}]', resultStatus: "success" as const }, guards);
+
+    // 3 more failed turns — counter restarted from 0, still below threshold of 4
+    for (let i = 10; i < 13; i++) {
+      const r = store.check("wf-reset", { toolName: "query_db", toolArgs: `{"q":"v${i}"}`, toolResult: "[]", resultStatus: "empty" as const }, guards);
+      assert.ok(r.allowed, `turn after reset should be allowed — counter was reset by success`);
+    }
+  });
+
+  it("Class B tracks tools independently — failure in one doesn't affect another", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 10 };
+
+    // tool_a fails 3 times with different args
+    for (let i = 0; i < 3; i++) {
+      store.check("wf-indep", { toolName: "tool_a", toolArgs: `{"i":${i}}`, toolResult: "[]", resultStatus: "empty" as const }, guards);
+    }
+
+    // tool_b should still be allowed — independent counter
+    const r = store.check("wf-indep", { toolName: "tool_b", toolArgs: '{"x":1}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    assert.ok(r.allowed, "tool_b has its own counter");
+  });
+
+  it("Class B adds blocked tool to blockedTools set for hard stop", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 6 };
+
+    // Trigger Class B block
+    for (let i = 0; i < 3; i++) {
+      store.check("wf-hs", { toolName: "search", toolArgs: `{"q":"v${i}"}`, toolResult: "[]", resultStatus: "empty" as const }, guards);
+    }
+    const rBlock = store.check("wf-hs", { toolName: "search", toolArgs: '{"q":"v99"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    assert.ok(!rBlock.allowed);
+
+    // Same tool+args after block → hard stop
+    const rHard = store.check("wf-hs", { toolName: "search", toolArgs: '{"q":"v99"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    assert.ok(!rHard.allowed);
+    assert.equal((rHard as LoopGuardViolation).dimension, "hard_stop");
+  });
+
+  it("Class B hard stop fires even with different args (tool-wide block)", () => {
+    const store = new LoopGuardStore();
+    const guards = { classBSuspicion: 3, windowSize: 6 };
+
+    // 2 failures → still under threshold
+    for (let i = 0; i < 2; i++) {
+      store.check("wf-tw", { toolName: "search", toolArgs: `{"q":"v${i}"}`, toolResult: "[]", resultStatus: "empty" as const }, guards);
+    }
+    // 3rd failure → Class B fires, tool-wide block added
+    const rBlock = store.check("wf-tw", { toolName: "search", toolArgs: '{"q":"v99"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    assert.ok(!rBlock.allowed);
+    assert.equal((rBlock as LoopGuardViolation).dimension, "class_b");
+
+    // Different args → still hard stop (Class B blocks tool-wide, not by args)
+    const rHard = store.check("wf-tw", { toolName: "search", toolArgs: '{"q":"completely_new"}', toolResult: "[]", resultStatus: "empty" as const }, guards);
+    assert.ok(!rHard.allowed);
+    assert.equal((rHard as LoopGuardViolation).dimension, "hard_stop");
+
+    // Different tool → still allowed
+    const rOther = store.check("wf-tw", { toolName: "fetch", toolArgs: '{"url":"x"}', toolResult: "ok", resultStatus: "success" as const }, guards);
+    assert.ok(rOther.allowed);
   });
 
   it("signal with different toolName resets classification to none", () => {
@@ -3221,13 +3379,73 @@ describe("Scenario 11: LoopGuardStore — unit tests", () => {
     // → consecutiveClassA never increments → guard never fires.
     // This documents a known foot-gun: windowSize: 0 = detection off.
     const store = new LoopGuardStore();
-    const guards = { classAConsecutive: 1, windowSize: 0 };
+    const guards = { classAConsecutive: 1, windowSize: 0, classBSuspicion: 999 };
 
     for (let i = 0; i < 5; i++) {
       const r = store.check("wf-zero-window", TOOL, guards);
       assert.ok(r.allowed, `turn ${i + 1} — windowSize:0 prevents any Class A from accumulating`);
       assert.equal(r.consecutiveClassA, 0);
     }
+  });
+
+  it("hard stop fires when same tool+args called after Class A recovery", () => {
+    const store = new LoopGuardStore();
+    const guards = { classAConsecutive: 2 };
+
+    store.check("wf-hs", TOOL, guards);
+    store.check("wf-hs", TOOL, guards);
+    const classA = store.check("wf-hs", TOOL, guards);
+    assert.ok(!classA.allowed);
+    assert.equal((classA as LoopGuardViolation).dimension, "class_a");
+
+    const hardStop = store.check("wf-hs", TOOL, guards);
+    assert.ok(!hardStop.allowed);
+    assert.equal((hardStop as LoopGuardViolation).dimension, "hard_stop");
+  });
+
+  it("allows different tool after Class A recovery (legitimate recovery)", () => {
+    const store = new LoopGuardStore();
+    const guards = { classAConsecutive: 2 };
+    const other = { toolName: "fallback_api", toolArgs: '{"x":1}', toolResult: "ok", resultStatus: "success" as const };
+
+    store.check("wf-recover", TOOL, guards);
+    store.check("wf-recover", TOOL, guards);
+    const classA = store.check("wf-recover", TOOL, guards);
+    assert.ok(!classA.allowed);
+
+    const recovered = store.check("wf-recover", other, guards);
+    assert.ok(recovered.allowed, "different tool must be allowed after recovery");
+  });
+
+  it("allows same tool with different args after Class A recovery", () => {
+    const store = new LoopGuardStore();
+    const guards = { classAConsecutive: 2, classBSuspicion: 999 };
+    const modified = { ...TOOL, toolArgs: '{"query":"different"}' };
+
+    store.check("wf-mod", TOOL, guards);
+    store.check("wf-mod", TOOL, guards);
+    const classA = store.check("wf-mod", TOOL, guards);
+    assert.ok(!classA.allowed);
+
+    const modResult = store.check("wf-mod", modified, guards);
+    assert.ok(modResult.allowed, "same tool with different args must be allowed");
+  });
+
+  it("hard stop persists — blocked tool stays blocked even after different tools succeed", () => {
+    const store = new LoopGuardStore();
+    const guards = { classAConsecutive: 2 };
+    const other = { toolName: "fallback_api", toolArgs: '{"x":1}', toolResult: "ok", resultStatus: "success" as const };
+
+    store.check("wf-persist", TOOL, guards);
+    store.check("wf-persist", TOOL, guards);
+    store.check("wf-persist", TOOL, guards); // Class A fires
+
+    store.check("wf-persist", other, guards); // legitimate recovery
+    store.check("wf-persist", other, guards);
+
+    const retry = store.check("wf-persist", TOOL, guards); // circle back to blocked tool
+    assert.ok(!retry.allowed);
+    assert.equal((retry as LoopGuardViolation).dimension, "hard_stop");
   });
 
   it("multiple traceIds remain isolated under rapid concurrent calls", () => {
@@ -3245,11 +3463,12 @@ describe("Scenario 11: LoopGuardStore — unit tests", () => {
       }
     }
 
-    // After 4 calls per traceId: T1=baseline, T2=ClassA#1, T3=ClassA#2, T4=ClassA#3 → blocked
+    // After 4 calls per traceId: T1=baseline, T2=ClassA#1, T3=ClassA#2, T4=ClassA#3 → blocked + tool recorded
+    // 5th call hits hard_stop — same tool+args already fired recovery
     for (const id of IDS) {
-      const r = store.check(id, TOOL, guards); // 5th call — still blocked
+      const r = store.check(id, TOOL, guards);
       assert.ok(!r.allowed, `${id} must be independently blocked`);
-      assert.equal((r as { consecutiveClassA: number }).consecutiveClassA, 4);
+      assert.equal((r as LoopGuardViolation).dimension, "hard_stop");
     }
 
     assert.equal(store.size, 5, "each traceId must have its own state entry");
@@ -3303,6 +3522,67 @@ describe("Scenario 12: Loop guard — via run()", () => {
 
     await client.shutdown();
     assert.equal(provider.getCallCount(), 3, "adapter called for allowed turns only");
+  });
+
+  it("throws LoopGuardExceededError on hard stop after recovery ignored", async () => {
+    const provider = new MockProvider({ name: "openai", response: "ok" });
+    const transport = new NoopTelemetryTransport();
+    const traceId = "loop-hard-stop";
+
+    const client = createTestClient({
+      adapters: [provider],
+      snapshot: buildBootstrapSnapshot({
+        projectId: "test",
+        mode: "enforce",
+        providers: [{ provider: "openai", model: "gpt-4o" }],
+        loopGuards: { classAConsecutive: 2 },
+      }),
+      transport,
+    });
+
+    await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+    await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+
+    // Class A fires → soft blocked with recovery
+    const softBlock = await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+    assert.equal(softBlock.blocked, true);
+
+    // Same tool + same args again → hard stop throws
+    await assert.rejects(
+      () => client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL }),
+      (err: unknown) => err instanceof LoopGuardExceededError,
+    );
+
+    await client.shutdown();
+  });
+
+  it("allows different tool via run() after recovery (no hard stop)", async () => {
+    const provider = new MockProvider({ name: "openai", response: "ok" });
+    const traceId = "loop-recover-run";
+
+    const client = createTestClient({
+      adapters: [provider],
+      snapshot: buildBootstrapSnapshot({
+        projectId: "test",
+        mode: "enforce",
+        providers: [{ provider: "openai", model: "gpt-4o" }],
+        loopGuards: { classAConsecutive: 2 },
+      }),
+    });
+
+    await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+    await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+
+    // Class A fires
+    const softBlock = await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
+    assert.equal(softBlock.blocked, true);
+
+    // Different tool → allowed (legitimate recovery)
+    const differentSignal = { toolName: "read_file", toolArgs: '{"path":"x"}', toolResult: "contents", resultStatus: "success" as const };
+    const result = await client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: differentSignal });
+    assert.ok(!result.blocked, "different tool must be allowed after recovery");
+
+    await client.shutdown();
   });
 
   it("emits loop_guard_blocked telemetry event on violation", async () => {
@@ -3407,7 +3687,7 @@ describe("Scenario 12: Loop guard — via run()", () => {
   it("concurrent run() calls with same traceId accumulate loop state correctly", async () => {
     // Fire classAConsecutive+2 calls simultaneously to the same traceId.
     // Because check() is synchronous, they serialize inside the event loop —
-    // exactly classAConsecutive calls must succeed before the guard blocks.
+    // exactly classAConsecutive calls succeed, one gets soft recovery, one throws hard stop.
     const provider = new MockProvider({ name: "openai", response: "ok" });
     const transport = new NoopTelemetryTransport();
     const traceId = "loop-concurrent";
@@ -3425,15 +3705,20 @@ describe("Scenario 12: Loop guard — via run()", () => {
     });
 
     const call = () => client.run({ messages: MESSAGES, metadata: { traceId }, loopSignal: LOOP_SIGNAL });
-    const results = await Promise.all([call(), call(), call(), call(), call()]);
+    const settled = await Promise.allSettled([call(), call(), call(), call(), call()]);
     await client.shutdown();
 
-    const allowed = results.filter((r) => !r.blocked).length;
-    const blocked = results.filter((r) => r.blocked === true).length;
+    const fulfilled = settled.filter((s) => s.status === "fulfilled").map((s) => (s as PromiseFulfilledResult<RunResult>).value);
+    const rejected = settled.filter((s) => s.status === "rejected");
+    const allowed = fulfilled.filter((r) => !r.blocked).length;
+    const softBlocked = fulfilled.filter((r) => r.blocked === true).length;
 
-    // T1=baseline, T2=ClassA#1, T3=ClassA#2 → 3 succeed; T4 and T5 both blocked
+    // T1=baseline, T2=ClassA#1, T3=ClassA#2 → 3 succeed
+    // T4=ClassA#3 → soft recovery (blocked return)
+    // T5=same tool+args after recovery → hard stop (throws)
     assert.equal(allowed, classAConsecutive, `exactly ${classAConsecutive} calls must succeed`);
-    assert.equal(blocked, 2, "remaining calls must be blocked by the loop guard");
+    assert.equal(softBlocked, 1, "one call must be soft-blocked with recovery");
+    assert.equal(rejected.length, 1, "one call must throw hard stop");
   });
 
   it("emits console.warn exactly once when loopGuards configured but loopSignal is absent", async () => {

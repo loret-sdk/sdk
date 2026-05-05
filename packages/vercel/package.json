@@ -1,0 +1,51 @@
+{
+  "name": "@loret/vercel",
+  "description": "Vercel AI SDK middleware for Loret — native loop detection and recovery for all AI SDK providers",
+  "license": "MIT",
+  "version": "1.0.2",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loret-sdk/sdk.git"
+  },
+  "keywords": [
+    "loret",
+    "vercel",
+    "ai-sdk",
+    "middleware",
+    "guardrails",
+    "loop-detection",
+    "agent",
+    "llm",
+    "cost-control"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx/esm --test src/__tests__/middleware.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@loret/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "@ai-sdk/provider": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@types/node": "^22.19.17"
+  }
+}

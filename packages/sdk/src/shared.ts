@@ -122,8 +122,30 @@ export interface LoopGuards {
    */
   readonly classAConsecutive?: number;
   /**
-   * Size of the sliding window used to track recent turns.
-   * Default: 5. Must be ≥ classAConsecutive.
+   * Class B failure threshold — blocks when a single tool accumulates
+   * this many failed (empty/error) calls in its per-tool window.
+   * Two trigger paths: (a) enough failures with distinct arg variations,
+   * or (b) enough failures with a stable result fingerprint.
+   * A success for that tool clears its window immediately.
+   * Default: 4.
+   */
+  readonly classBSuspicion?: number;
+  /**
+   * Per-tool sliding window size for Class B evaluation.
+   * Each tool tracks its own window of this many recent calls,
+   * independent of other tools.
+   * Default: 6.
+   */
+  readonly classBToolWindow?: number;
+  /**
+   * Minimum distinct arg fingerprints for Class B trigger path (a).
+   * Path (b) — stable result fingerprint — fires regardless of this.
+   * Default: 2.
+   */
+  readonly classBDistinctArgs?: number;
+  /**
+   * Size of the global sliding window for Class A consecutive tracking.
+   * Default: 12. Must be ≥ classAConsecutive.
    */
   readonly windowSize?: number;
 }

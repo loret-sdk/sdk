@@ -56,6 +56,10 @@
       "import": "./dist/providers/anthropic.js",
       "types": "./dist/providers/anthropic.d.ts"
     },
+    "./providers/custom": {
+      "import": "./dist/providers/custom.js",
+      "types": "./dist/providers/custom.d.ts"
+    },
     "./testing": {
       "import": "./dist/testing.js",
       "types": "./dist/testing.d.ts"
@@ -66,8 +70,8 @@
     "dev": "tsc -p tsconfig.json --watch",
     "lint": "eslint src scripts --ext .ts",
     "lint:fix": "eslint src scripts --ext .ts --fix",
-    "test": "node --import tsx/esm --test src/__tests__/sdk.test.ts",
-    "test:watch": "node --import tsx/esm --test --watch src/__tests__/sdk.test.ts",
+    "test": "node --import tsx/esm --test src/__tests__/sdk.test.ts src/__tests__/session.test.ts",
+    "test:watch": "node --import tsx/esm --test --watch src/__tests__/sdk.test.ts src/__tests__/session.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.contracts.json",
     "validate": "tsx scripts/validate.ts",
     "clean": "rm -rf dist"
