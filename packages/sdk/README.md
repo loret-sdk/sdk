@@ -4,7 +4,7 @@
 
 Stops repeated tool-call loops, prevents silent task failure, and runs in-process with near-zero latency.
 
-See the full [documentation and examples](../../README.md).
+See the full [documentation and examples](https://github.com/loret-sdk/sdk#readme).
 
 ## Quick Start
 
@@ -22,7 +22,7 @@ const result = await safeCheck("payments-api");
 session.reset(); // clear loop state at end of run
 ```
 
-For LangChain or Vercel AI SDK, see [`@loret/langchain`](../langchain/README.md) and [`@loret/vercel`](../vercel/README.md).
+For LangChain or Vercel AI SDK, see [`@loret/langchain`](https://www.npmjs.com/package/@loret/langchain) and [`@loret/vercel`](https://www.npmjs.com/package/@loret/vercel).
 
 ## Advanced Configuration
 
