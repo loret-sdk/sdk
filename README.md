@@ -238,14 +238,14 @@ For the low-level `Loret` SDK client, all errors extend `LoretError` with a `cod
 Loret logs detection events and a run summary to the console — enabled by default.
 
 ```
-🔄 [Loret] Loop detected: check_deploy_status() (3 consecutive calls with same args)
+[Loret] Loop detected: check_deploy_status() (3 consecutive calls with same args)
 
-✅ [Loret] Run completed
-   • Tool calls: 7 executed, 2 blocked
-   • Loops caught: 1
-   • Actions taken: 1 recovery
-   • Estimated savings: ~5 calls
-   • Final status: Recovery successful
+[Loret] Run completed
+  • Tool calls: 7 executed, 2 blocked
+  • Loops caught: 1
+  • Actions taken: 1 recovery
+  • Estimated savings: ~5 calls
+  • Final status: Recovery successful
 ```
 
 Only meaningful events are printed — no per-tool-call noise. Disable with `verbose: false` in options.
