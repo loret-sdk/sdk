@@ -2,7 +2,7 @@
   "name": "@loret/langchain",
   "description": "LangChain integration for Loret — automatic loop detection and budget guardrails for LangChain agents",
   "license": "MIT",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

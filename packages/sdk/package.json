@@ -2,7 +2,7 @@
   "name": "@loret/sdk",
   "description": "Runtime policy layer for LLM applications — enforce cost, privacy, and runtime guardrails on every model call",
   "license": "MIT",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
